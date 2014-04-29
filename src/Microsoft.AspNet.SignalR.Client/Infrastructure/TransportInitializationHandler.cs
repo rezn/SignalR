@@ -3,7 +3,10 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNet.SignalR.Client.Http;
+using Microsoft.AspNet.SignalR.Client.Transports;
 using Microsoft.AspNet.SignalR.Infrastructure;
+using Newtonsoft.Json.Linq;
 
 namespace Microsoft.AspNet.SignalR.Client.Infrastructure
 {
@@ -11,10 +14,20 @@ namespace Microsoft.AspNet.SignalR.Client.Infrastructure
     {
         private ThreadSafeInvoker _initializationInvoker;
         private TaskCompletionSource<object> _initializationTask;
+        private IConnection _connection;
+        private IHttpClient _httpClient;
+        private string _connectionData;
         private IDisposable _tokenCleanup;
 
-        public TransportInitializationHandler(TimeSpan failureTimeout, CancellationToken disconnectToken)
+        public TransportInitializationHandler(IConnection connection,
+                                              IHttpClient httpClient,
+                                              string connectionData,
+                                              CancellationToken disconnectToken)
         {
+            _httpClient = httpClient;
+            _connection = connection;
+            _connectionData = connectionData;
+
             _initializationTask = new TaskCompletionSource<object>();
             _initializationInvoker = new ThreadSafeInvoker();
 
@@ -28,7 +41,7 @@ namespace Microsoft.AspNet.SignalR.Client.Infrastructure
             },
             state: null);
 
-            TaskAsyncHelper.Delay(failureTimeout).Then(() =>
+            TaskAsyncHelper.Delay(connection.TotalTransportConnectTimeout).Then(() =>
             {
                 Fail(new TimeoutException(Resources.Error_TransportTimedOutTryingToConnect));
             });
@@ -46,18 +59,20 @@ namespace Microsoft.AspNet.SignalR.Client.Infrastructure
 
         public void Success()
         {
-            _initializationInvoker.Invoke(() =>
+            _httpClient.GetStartResponse(_connection, _connectionData).Then(response =>
             {
-#if NETFX_CORE
-                Task.Run(() =>
-#else
-                ThreadPool.QueueUserWorkItem(_ =>
-#endif
+                var started = _connection.JsonDeserializeObject<JObject>(response)["Response"];
+                if (started.ToString() == "started")
                 {
-                    _initializationTask.SetResult(null);
-                });
-
-                _tokenCleanup.Dispose();
+                    SuccessComplete();
+                }
+                else
+                {
+                    Fail(new InvalidOperationException(Resources.Error_StartFailed));
+                }
+            }).Catch(ex =>
+            {
+                Fail(new InvalidOperationException(Resources.Error_StartFailed, ex));
             });
         }
 
@@ -72,6 +87,23 @@ namespace Microsoft.AspNet.SignalR.Client.Infrastructure
             {
                 OnFailure();
                 _initializationTask.SetException(ex);
+                _tokenCleanup.Dispose();
+            });
+        }
+
+        private void SuccessComplete()
+        {
+            _initializationInvoker.Invoke(() =>
+            {
+#if NETFX_CORE
+                Task.Run(() =>
+#else
+                ThreadPool.QueueUserWorkItem(_ =>
+#endif
+                {
+                    _initializationTask.SetResult(null);
+                });
+
                 _tokenCleanup.Dispose();
             });
         }

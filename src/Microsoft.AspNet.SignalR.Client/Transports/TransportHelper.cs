@@ -61,6 +61,36 @@ namespace Microsoft.AspNet.SignalR.Client.Transports
                             });
         }
 
+        public static Task<string> GetStartResponse(this IHttpClient httpClient, IConnection connection, string connectionData)
+        {
+            if (httpClient == null)
+            {
+                throw new ArgumentNullException("httpClient");
+            }
+
+            if (connection == null)
+            {
+                throw new ArgumentNullException("connection");
+            }
+
+            string startUrl = connection.Url + "start" +
+                              "?transport=" + connection.Transport.Name +
+                              "&clientProtocol=" + connection.Protocol +
+                              "&connectionToken=" + Uri.EscapeDataString(connection.ConnectionToken);
+
+            if (!String.IsNullOrEmpty(connectionData))
+            {
+                startUrl += "&connectionData=" + connectionData;
+            }
+
+            startUrl += AppendCustomQueryString(connection, startUrl);
+
+            httpClient.Initialize(connection);
+
+            return httpClient.Get(startUrl, connection.PrepareRequest, isLongRunning: false)
+                            .Then(response => response.ReadAsString());
+        }
+
         [SuppressMessage("Microsoft.Design", "CA1062:Validate arguments of public methods", MessageId = "0", Justification = "This is called by internally")]
         public static string GetReceiveQueryString(IConnection connection, string connectionData, string transport)
         {
@@ -72,6 +102,7 @@ namespace Microsoft.AspNet.SignalR.Client.Transports
             // ?transport={0}&connectionToken={1}&messageId={2}&groups={3}&connectionData={4}{5}
             var qsBuilder = new StringBuilder();
             qsBuilder.Append("?transport=" + transport)
+                     .Append("&clientProtocol=" + connection.Protocol)
                      .Append("&connectionToken=" + Uri.EscapeDataString(connection.ConnectionToken));
 
             if (connection.MessageId != null)
